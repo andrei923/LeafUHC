@@ -1,0 +1,736 @@
+import:
+	org.bukkit.Bukkit
+	java.io.File
+	java.util.ArrayList
+	java.util.Arrays	
+	org.apache.commons.io.FileUtils
+
+options:
+
+	#do not touch this -_-
+	plugin-version: 0.0.1
+
+function check_yaml(dir: text, value: text, set: text, type: text = "TEXT"):
+	yaml value {_value} from "leaf.uhc.%{_dir}%" is not set:
+		if {_type} is "text":
+			set yaml value {_value} from "leaf.uhc.%{_dir}%" to {_set}
+		if {_type} is "number":
+			set yaml value {_value} from "leaf.uhc.%{_dir}%" to {_set} parsed as number
+		if {_type} is "boolean":
+			set yaml value {_value} from "leaf.uhc.%{_dir}%" to {_set} parsed as boolean
+	if {_type} is "list":
+		yaml list {_value} from "leaf.uhc.%{_dir}%" is not set
+		loop {_set} split at "||":
+			add loop-value to yaml list {_value} from "leaf.uhc.%{_dir}%"
+
+local effect [leaf] send title %string% with subtitle %string% to %players% with %number% fadein and %number% fadeout for %number%:		
+	trigger:
+		loop exprs-3:
+			{UHC.TitleManager}.sendTitle(loop-value-1, expr-1, expr-4, expr-5 and expr-6)
+			{UHC.TitleManager}.sendSubtitle(loop-value-1 and expr-2)
+			
+local effect create scoreboard for %player%:	
+	trigger:
+		if {UHC.TitleManager}.hasScoreboard(expr-1) is true:
+			{UHC.TitleManager}.removeScoreboard(expr-1)
+		{UHC.TitleManager}.giveScoreboard(expr-1)
+
+local effect delete scoreboard of %player%:	
+	trigger:
+		{UHC.TitleManager}.removeScoreboard(expr-1)	
+
+local effect set scoreboard title of %player% to %string%:	
+	trigger:
+		{UHC.TitleManager}.setScoreboardTitle(expr-1, expr-2)
+
+local effect set scoreboard line %number% of %player% to %string%:	
+	trigger:
+		{UHC.TitleManager}.setScoreboardValue(expr-2, expr-1, expr-3)
+
+
+#From https://forums.skunity.com/resources/mirrorutils.706/ by EWS
+local expression replacer %texts% with %texts% in %text%:
+	return type: text
+	get:
+		set {_result} to expr-3
+		loop exprs-1:
+			add 1 to {_n}
+			replace all "%loop-value-1%" with ({_n}th element of exprs-2 ? "") in {_result}
+		return {_result}	
+
+local expression %item% with lore %text%:
+	return type: item
+	get:
+		set {_i} to expr-1.clone()
+		set {_meta} to {_i}.getItemMeta()
+		{_meta}.setLore(Arrays.asList(split expr-2 at "||"))
+		{_i}.setItemMeta({_meta})
+		return {_i}				
+#
+
+on load:
+	loop currently loaded yaml files:
+		loop-value contains "leaf.uhc.config"
+		unload yaml loop-value-1
+	load yaml "plugins/LeafUHC/config.yml" as "leaf.uhc.config"
+	load yaml "plugins/LeafUHC/arenas.yml" as "leaf.uhc.arenas"	
+	check_yaml("config", "settings.mode", "MultiArena")			
+	check_yaml("config", "settings.chat-format", "&3{player} &8» &7{message}")
+	check_yaml("config", "settings.items.Stats.item", "Book")		
+	check_yaml("config", "settings.items.Stats.name", "&eYour Stats")	
+	check_yaml("config", "settings.items.Stats.slot", "0", "number")
+	check_yaml("config", "settings.items.Leave.item", "magma cream")		
+	check_yaml("config", "settings.items.Leave.name", "&cLeave the game")	
+	check_yaml("config", "settings.items.Leave.slot", "8", "number")						
+	check_yaml("config", "settings.timers.in-lobby", "30", "number")			
+	check_yaml("config", "settings.timers.pvp", "30", "number")	
+	check_yaml("config", "settings.timers.deathmatch", "30", "number")		
+	check_yaml("config", "settings.scoreboard.name", "&eUHC")	
+	check_yaml("config", "settings.scoreboard.website", "&eplay.my-cool-server.net")		
+	check_yaml("config", "messages.join", "&a{player} &ehas joined to the game.")	
+	check_yaml("config", "messages.leave", "&a{player} &eleft the game.")
+	check_yaml("config", "messages.kill", "&9➜ &a{victim} &7was killed by &a{attacker}")	
+	check_yaml("config", "messages.death", "&9➜ &a{victim} &7died")	
+	check_yaml("config", "messages.starting", "&eThe game starts in &a{seconds} &eseconds")	
+	check_yaml("config", "messages.pvp", "&cPvP enabled, good luck.")			
+	check_yaml("config", "messages.deathmatch", "&eDeathmatch started, good luck.")		
+	check_yaml("config", "messages.summary", "||||||&e✦ &7UHC &e✦||||&aWinner &7- &e{player}||&aKills &7- &e{kills}||||||", "list")	
+	check_yaml("config", "titles.win.title", "&e&l##1 &a&lYOU WON")
+	check_yaml("config", "titles.win.subtitle", "")					
+	check_yaml("config", "titles.death.title", "&e&l##{alive-players} &c&lGAME OVER")
+	check_yaml("config", "titles.death.subtitle", "")	
+	save yaml "leaf.uhc.config"
+	set {UHC.TitleManager} to Bukkit.getServer().getPluginManager().getPlugin("TitleManager")
+
+function uhc_get_player_stats(p: player, s: text) :: number:
+	set {_uuid} to uuid of {_p}
+	if {uhc::stats::%{_uuid}%::%{_s}%} is not set:
+		return 0
+	else:	
+		return {uhc::stats::%{_uuid}%::%{_s}%}
+
+on join:
+	yaml value "settings.mode" from "leaf.uhc.config" is "Bungeecord":
+		if {uhc::cache::global::arena} is set:
+			if {uhc::arena::%{uhc::cache::global::arena}%::cache::status} is "WAITING" or "STARTING":
+				if size of {uhc::arena::%{uhc::cache::global::arena}%::cache::ninjas::*} < 100:		
+					uhc_join(player, {uhc::cache::global::arena})
+				else:
+					kick player due to "&eThe arena is full."
+			else:
+				kick player due to "&eThe arena is already running."
+		else:
+			if player has permission "uhc.admin":
+				send "&eThere is no arena created, you have to create one."
+				stop
+			kick player due to "&eNo arenas found."
+
+function uhc_stats_menu(p: player):
+	open chest inventory with 5 rows named "&8&l» &7Your Stats" to {_p}
+	wait a tick																		
+	make a gui slot 12 of {_p} with stone axe named "&8➥ &7Kills" with lore "&a➜ &e%uhc_get_player_stats({_p}, ""kills"")%" to do nothing
+	make a gui slot 13 of {_p} with nether star named "&8➥ &7Wins" with lore "&a➜ &e%uhc_get_player_stats({_p}, ""wins"")%" to do nothing
+	make a gui slot 14 of {_p} with pufferfish item named "&8➥ &7Deaths" with lore "&a➜ &e%uhc_get_player_stats({_p}, ""deaths"")%" to do nothing
+	set {_slot} to 19
+	loop coal ore, lapis lazuli ore, red dye, emerald ore, iron ore, gold ore and diamond ore:
+		set {_type} to "%loop-value-1%"		
+		if loop-value is coal ore:
+			set {_display} to "Coal Ore"
+		if loop-value is lapis lazuli ore:
+			set {_display} to "Lapis Lazuli Ore"
+		if loop-value is red dye:
+			set {_display} to "Redstone Ore"
+			set {_w} to redstone ore block
+			set {_type} to "%{_w}%"		
+		if loop-value is emerald ore:
+			set {_display} to "Emerald Ore"
+		if loop-value is iron ore:
+			set {_display} to "Iron Ore"
+		if loop-value is gold ore:
+			set {_display} to "Gold Ore"	
+		if loop-value is diamond ore:
+			set {_display} to "Diamond Ore"						
+		make a gui slot {_slot} of {_p} with loop-value-1 named "&8➥ &7Mined %{_display}%" with lore "&a➜ &e%uhc_get_player_stats({_p}, {_type})%" to do nothing
+		add 1 to {_slot}
+	while name of {_p}'s current inventory is "&8&l» &7Your Stats":
+		loop  0, 1, 2, 3, 4 ,5, 6, 7, 8, 17, 26, 35, 44, 43, 42, 41, 40, 39, 38, 37, 36, 27, 18 and 9:
+			make a gui slot loop-value-1 of {_p} with black glass named "&7Hi, &e&n%{_p}'s display name%&r &7OwO" to do nothing
+			wait a tick				
+			make a gui slot loop-value-1 of {_p} with air to do nothing
+
+command uhc [<text = help>] [<text>] [<text>] [<number>]:
+	executable by: players
+	trigger:
+		if arg 1 is "help":
+			if player has permission "uhc.player":
+				send "&8&l[&7&l----------&8[ &6&lUHC &8]&7&l----------&8&l]"
+				send "&a/uhc list"
+				send "&a/uhc join &8(&7arena_name&8)"		
+				send "&a/uhc autojoin"
+				send "&a/uhc leave"
+				send "&7&l------------------------------------&8&l]"
+			if player has permission "uhc.admin":
+				send "&7/uhc setlobby"			
+				send "&7/uhc start"							
+				send "&7/uhc createarena &8(&7arena_name&8)"			
+				send "&7/uhc setbordersize &8(&7arena_name&8)"				
+				send "&7/uhc setarenalobby &8(&7arena_name&8)"
+				send "&7/uhc addarenadeathmatch &8(&7arena_name&8)"											
+				send "&7/uhc savearena &8(&7arena_name&8)"							
+				send "&7/uhc deletearena &8(&7arena_name&8)"															
+				send "&7&l-----------------------------------"
+				stop
+		if arg 1 is "join":	
+			yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena"	
+			uhc_join(player, arg-2)
+		if arg 1 is "list":		
+			yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena"
+			if {uhc::player::%player%::state} is not set:	
+				open chest inventory with 6 rows named "&8&l» &7UHC Arenas" to player
+				wait a tick	
+				set {_slot} to 10						
+				loop {uhc::arenas::*}:
+					if {uhc::arena::%loop-value%::cache::status} is "WAITING":
+						set {_status} to "&aWaiting"
+					if {uhc::arena::%loop-value%::cache::status} is "STARTING":
+						set {_status} to "&6Starting"		
+					if {uhc::arena::%loop-value%::cache::status} is "IN-GAME" or "DEATHMATCH":
+						set {_status} to "&9IN-GAME"	
+					if {uhc::arena::%loop-value%::cache::status} is "RESTARTING":
+						set {_status} to "&cRestarting"		
+					set {_item} to green clay named "&8» &7Arena: &e%loop-value%"
+					set line 1 of {_item}'s lore to "&8▪ &7Status: &e%{_status}%"	
+					set line 2 of {_item}'s lore to "&8▪ &7Playing: &e%size of {uhc::arena::%loop-value%::cache::ninjas::*}%"																				
+					make a gui slot {_slot} of player with {_item} to run function uhc_join(player, loop-value-1)
+					add 1 to {_slot}
+					if {_slot} is 17 or 26 or 35:
+						add 2 to {_slot}		
+		if arg 1 is "leave":	
+			yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena"
+			uhc_leave(player)
+		if arg 1 is "autojoin":	
+			yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena"	
+			if {uhc::player::%player%::state} is not set:
+				loop {uhc::arenas::*}:
+					if {uhc::arena::%loop-value%::cache::status} is "WAITING" or "STARTING":
+						uhc_join(player, loop-value)
+						stop
+		if arg-1 is "stats":
+			uhc_stats_menu(player)
+		if arg 1 is "createarena":	
+			if player has permission "uhc.admin":		
+				if arg-2 is set:
+					if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is not set:
+						set yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" to "setup"
+						save yaml "leaf.uhc.arenas"
+						send "&aArena &c%arg-2% &ahas been created!"
+					else:
+						send "&aThis arena already exists!"	
+				else:
+					send "&aSpecify Arena!"				
+		if arg 1 is "setarenalobby":
+			if player has permission "uhc.admin":		
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is set:
+					set yaml value "Arenas.%arg-2%.lobby" from "leaf.uhc.arenas" to location of player
+					send "&aLobby for Arena &3%arg-2% &ahas been set!"				
+					save yaml "leaf.uhc.arenas"		
+				else:
+					send "&aThis arena not exists"	
+		if arg 1 is "addarenadeathmatch":
+			if player has permission "uhc.admin":		
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is set:
+					set {_size} to size of yaml nodes with keys "Arenas.%arg-2%.deathmatch-spawnpoints" from "leaf.uhc.arenas"
+					set yaml value "Arenas.%arg-2%.deathmatch-spawnpoints.%{_size}+1%" from "leaf.uhc.arenas" to location of player
+					send "&aDeathmatch spawnpoint with id &3%{_size}+1% &afor Arena &3%arg-2% &ahas been set!"				
+					save yaml "leaf.uhc.arenas"		
+				else:
+					send "&aThis arena not exists"	
+		if arg 1 is "setbordersize":
+			if player has permission "uhc.admin":		
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is set:
+					set yaml value "Arenas.%arg-2%.border" from "leaf.uhc.arenas" to arg-3 parsed as number
+					send "&aBorder Size for Arena &3%arg-2% &ahas been set!"				
+					save yaml "leaf.uhc.arenas"		
+				else:
+					send "&aThis arena not exists"															
+		if arg 1 is "setlobby":	
+			if player has permission "uhc.admin":
+				set yaml value "Locations.Lobby" from "leaf.uhc.config" to location of player
+				save yaml "leaf.uhc.config"
+				send "&aLobby set."																			
+		if arg 1 is "start":
+			if player has permission "uhc.admin":
+				if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} is "WAITING" or "STARTING":
+					#size of {uhc::arena::%{uhc::player::%player%::arena}%::cache::ninjas::*} > 1
+					uhc_start({uhc::player::%player%::arena})
+		if arg 1 is "reload":		
+			if player has permission "uhc.admin":
+				broadcast "&aReloading..."
+				make console execute command "sk reload %script%"
+		if arg 1 is "savearena":	
+			if player has permission "uhc.admin":		
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is "setup":
+					if yaml value "Arenas.%arg-2%.lobby" from "leaf.uhc.arenas" is set:		
+						if size of yaml nodes with keys "Arenas.%arg-2%.deathmatch-spawnpoints" from "leaf.uhc.arenas" > 1:
+							if yaml value "Arenas.%arg-2%.border" from "leaf.uhc.arenas" is not set:
+								set yaml value "Arenas.%arg-2%.border" from "leaf.uhc.arenas" to 1000														
+							set yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" to "ready"
+							set yaml value "Arenas.%arg-2%.center" from "leaf.uhc.arenas" to location(0, 0, 0, arg-2 parsed as world)
+							save yaml "leaf.uhc.arenas"
+							add arg-2 to {uhc::arenas::*}
+							send "&aArena &c%arg-2% &ahas been saved."
+							uhc_resetarena(arg-2)
+						
+						else:
+							send "&aDeathmatch spawnpoint(s) not set!"																								
+					else:
+						send "&aLobby is not set!"	
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is "ready":
+					send "&aThis arena is still created, saving the new settings if there is any."
+					save yaml "leaf.uhc.arenas"						
+				else:
+					send "&aThis arena not exists"
+		if arg 1 is "debug":	
+			if player has permission "uhc.admin":
+				send "&fArena: &a%{uhc::player::%player%::arena}%"	
+				send "&fStatus: &a%{uhc::arena::%{uhc::player::%player%::arena}%::cache::status}%"	
+				send "&fPlayers: &a%size of {uhc::arena::%{uhc::player::%player%::arena}%::cache::ninjas::*}%"		
+		if arg 1 is "deletearena":	
+			if player has permission "uhc.admin":		
+				if yaml value "Arenas.%arg-2%.state" from "leaf.uhc.arenas" is set:
+					uhc_resetarena(arg-2)
+					delete yaml value "Arenas.%arg-2%" from "leaf.uhc.arenas"
+					save yaml "leaf.uhc.arenas"						
+					remove arg-2 from {uhc::arenas::*}
+					send "&aArena &c%arg-2% &ahas been deleted."
+				else:
+					send "&aThis arena not exists"
+
+on mine:
+	if {uhc::player::%player%::state} is "IN-GAME":
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} = "IN-GAME" or "DEATHMATCH":	
+			if event-block is lapis lazuli ore or redstone ore or iron ore or gold ore or diamond ore or emerald ore:
+				add 1 to {uhc::stats::%uuid of player%::ores::%type of event-block%}
+
+on chat:
+	if {uhc::player::%player%::state} is set:
+		cancel event
+		send replacer "{player}" and "{message}" with player's display name and message in yaml value "settings.chat-format" from "leaf.uhc.config" to {uhc::arena::%{uhc::player::%player%::arena}%::cache::ninjas::*}
+
+on drop:
+	if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} is "STARTING" or "WAITING":
+		cancel event
+					
+on hunger bar change:	
+	if {uhc::player::%player%::state} is "IN-GAME":
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} is "STARTING" or "WAITING":
+			set player's hunger to 20
+
+
+function uhc_player_death(p: player, killer: text = "null"):
+	set {_uuid} to uuid of {_p}
+	set {_arena} to {uhc::player::%{_p}%::arena}
+	set {_players-left} to size of {uhc::arena::%{_arena}%::cache::ninjas::*}
+	add {_p} to {uhc::arena::%{_arena}%::cache::bad-ninjas::*}
+	uhc_remove({_p}, {_arena})	
+	create lightning effect at {_p}
+	set {_h} to {_p}'s skull
+	drop {_h} at {_p}	
+	add 1 to {uhc::stats::%{_uuid}%::deaths}
+	set {_p}'s gamemode to spectator
+	set {_title} to value "titles.death.title" from "leaf.uhc.config"
+	replace all "{alive-players}" with "%size of {uhc::arena::%{_arena}%::cache::ninjas::*}+1%" in {_title}
+	send title {_title} with subtitle yaml value "titles.death.subtitle" from "leaf.uhc.config" to {_p} with 10 fadein and 10 fadeout for 40
+	if {_killer} != "null":
+		set {_killer} to {_killer} parsed as player
+		if {_killer} is not {_p}:
+			set {_uuid2} to uuid of {_killer}
+			add 1 to {uhc::stats::%{_uuid2}%::kills}
+			send replacer "{victim}" and "{attacker}" with {_p}'s display name and {_killer}'s display name in yaml value "messages.kill" from "leaf.bg.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}
+		else:
+			send replacer "{victim}" with {_p}'s display name in yaml value "messages.death" from "leaf.bg.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}			
+	else:
+		send replacer "{victim}" with {_p}'s display name in yaml value "messages.death" from "leaf.bg.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}
+
+on damage of player:
+	if {uhc::player::%victim%::state} is "IN-GAME":
+		if {uhc::arena::%{uhc::player::%victim%::arena}%::cache::status} is "STARTING" or "WAITING":
+			cancel event
+			damage cause is void
+			teleport victim to {uhc::arena::%{uhc::player::%victim%::arena}%::lobby}
+		if {uhc::arena::%{uhc::player::%victim%::arena}%::cache::status} is "IN-GAME" or "DEATHMATCH":
+			if attacker is player:
+				if {uhc::arena::%{uhc::player::%victim%::arena}%::cache::pvp} is false:
+					cancel event
+			if damage >= victim's health:
+				cancel event
+				if attacker is set:
+					add 1 to {uhc::player::%attacker%::kills}				
+					uhc_player_death(victim, "%attacker%")
+				else:
+					uhc_player_death(victim)					
+		if {uhc::arena::%{uhc::player::%victim%::arena}%::cache::status} is "RESTARTING":				
+			cancel event	
+
+function uhc_remove(p: player, arena: text):
+	remove {_p} from {uhc::arena::%{_arena}%::cache::ninjas::*}
+	if {uhc::arena::%{_arena}%::cache::status} is "IN-GAME" or "DEATHMATCH":	
+		size of {uhc::arena::%{_arena}%::cache::ninjas::*} is 1:
+			set {uhc::arena::%{_arena}%::cache::status} to "RESTARTING"
+			loop {uhc::arena::%{_arena}%::cache::ninjas::*}:
+				send title yaml value "titles.win.title" from "leaf.uhc.config" with subtitle yaml value "titles.win.subtitle" from "leaf.uhc.config" to loop-value-1 with 10 fadein and 10 fadeout for 40
+				loop yaml list "messages.summary" from "leaf.uhc.config":
+					set {_msg} to loop-value-2
+					replace all "{player}" with "%loop-value-1%" in {_msg}
+					replace all "{kills}" with "%{uhc::player::%loop-value-1%::kills}%" in {_msg}
+					send message centered colored {_msg} to {uhc::arena::%{_arena}%::cache::ninjas::*} and {uhc::arena::%{_arena}%::cache::bad-ninjas::*}
+				add 1 to {uhc::stats::%uuid of loop-value-1%::wins}
+				loop 10 times:
+					if {uhc::player::%loop-value-1%::state} is "IN-GAME":
+						launch "BALL" firework at location of loop-value-1 timed 1 coloured "RED" and "BLUE" and "YELLOW" and "GREEN"
+						wait a second				
+				uhc_resetarena({_arena})
+
+on load:
+	delete {uhc::player::*}
+	delete {uhc::arena::*}
+	delete {uhc::arenas::*}
+	send "&7&l--------------------------------------------" to console
+	send " " to console
+	send "&aLoading &ev.{@plugin-version}&a..." to console
+	broadcast "&aUHC loaded!"
+	send " " to console
+	send "&7&l--------------------------------------------" to console
+	loop yaml nodes with keys "Arenas" from "leaf.uhc.arenas":
+		if yaml value "Arenas.%loop-value-1%.state" from "leaf.uhc.arenas" is "ready":
+			add loop-value-1 to {uhc::arenas::*}	
+			delete {uhc::arena::%loop-value-1%::cache::ninjas::*} and {uhc::arena::%loop-value-1%::cache::bad-ninjas::*}
+	yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena":
+		loop {uhc::arenas::*}:
+			uhc_resetarena(loop-value)
+	yaml value "settings.mode" from "leaf.uhc.config" is "Bungeecord":
+		if size of {uhc::arenas::*} > 0:
+			set {uhc::cache::global::arena} to a random element out of {uhc::arenas::*}
+			uhc_resetarena({uhc::cache::global::arena})	
+	loop "Stats" and "Leave":
+		set {uhc::cache::items::%loop-value-1%} to yaml value "settings.items.%loop-value-1%.item" from "leaf.uhc.config" parsed as material
+		set name of {uhc::cache::items::%loop-value-1%} to yaml value "settings.items.%loop-value-1%.name" from "leaf.uhc.config"
+
+on unload:
+	send "&7&l--------------------------------------------" to console
+	send " " to console
+	send "&aDisabling &ev.{@plugin-version}&a..." to console
+	send "&ev.{@plugin-version} &adisabled!" to console
+	send " " to console
+	send "&7&l--------------------------------------------" to console
+
+	
+function uhc_leave(p: player):
+	if {uhc::player::%{_p}%::state} is set:
+		if {uhc::player::%{_p}%::state} is "IN-GAME":
+			set {_arena} to {uhc::player::%{_p}%::arena}
+			uhc_remove({_p}, {_arena})
+			if size of {uhc::arena::%{_arena}%::cache::ninjas::*} = 0:
+				if {uhc::arena::%{_arena}%::cache::status} != "RESTARTING":
+					uhc_resetarena({_arena})
+			send replacer "{player}" with {_p}'s display name in yaml value "messages.leave" from "leaf.uhc.config" to {uhc::arena::%{uhc::player::%{_p}%::arena}%::cache::ninjas::*}		
+		loop "arena" and "state":
+			delete {uhc::player::%{_p}%::%loop-value%}	
+		uhc_clear_player({_p})
+		delete scoreboard of {_p}
+		teleport {_p} to yaml value "Locations.Lobby" from "leaf.uhc.config"		
+		
+function uhc_join(p: player, arena: text):	
+	if {uhc::player::%{_p}%::state} is not set:
+		if yaml value "Arenas.%{_arena}%.state" from "leaf.uhc.arenas" is "ready":
+			if {uhc::arena::%{_arena}%::cache::status} is "WAITING" or "STARTING":
+				if size of {uhc::arena::%{_arena}%::cache::ninjas::*} < 100:
+					uhc_clear_player({_p})
+					set {uhc::player::%{_p}%::state} to "IN-GAME"
+					set {uhc::player::%{_p}%::arena} to {_arena}
+					set {uhc::player::%{_p}%::kills} to 0
+					add {_p} to {uhc::arena::%{_arena}%::cache::ninjas::*}	
+					if size of {uhc::arena::%{_arena}%::cache::ninjas::*} = 2:
+						uhc_start_countdown({_arena})											
+					send replacer "{player}" and "{players-count}" with {_p}'s display name and "%size of {uhc::arena::%{_arena}%::cache::ninjas::*}%" in yaml value "messages.join" from "leaf.uhc.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}
+					teleport {_p} to yaml value "Arenas.%{_arena}%.lobby" from "leaf.uhc.arenas"
+					uhc_createBoard({_p}, "UHC-WAITING", 9)
+					set slot yaml value "settings.items.Stats.slot" from "leaf.uhc.config" of {_p} to {uhc::cache::items::Stats}
+					set slot yaml value "settings.items.Leave.slot" from "leaf.uhc.config" of {_p} to {uhc::cache::items::Leave}
+				else:
+					send "&7This arena is full" to {_p}
+			else:
+				send "&7This game is running" to {_p}
+		else:
+			send "&7This arena not exists" to {_p}
+	else:
+		send "&7You are already playing." to {_p}
+
+function uhc_start_countdown(arena: text):
+	set {uhc::arena::%{_arena}%::cache::status} to "STARTING"
+	loop {uhc::arena::%{_arena}%::cache::seconds} times:
+		if {uhc::arena::%{_arena}%::cache::status} is "STARTING" or "WAITING":
+			size of {uhc::arena::%{_arena}%::cache::ninjas::*} >= 2
+			remove 1 from {uhc::arena::%{_arena}%::cache::seconds}	
+			if {uhc::arena::%{_arena}%::cache::seconds} = 1 or 2 or 3 or 4 or 5 or 10:
+				send replacer "{seconds}" with "%{uhc::arena::%{_arena}%::cache::seconds}%" in yaml value "messages.starting" from "leaf.uhc.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}	
+			if {uhc::arena::%{_arena}%::cache::seconds} = 1:
+				size of {uhc::arena::%{_arena}%::cache::ninjas::*} >= 2:
+					uhc_start({_arena})
+				else:
+					set {uhc::arena::%{_arena}%::cache::status} to "WAITING"
+					set {uhc::arena::%{_arena}%::cache::seconds} to yaml value "settings.timers.in-lobby" from "leaf.uhc.config"
+			wait a second			
+		else:
+			stop
+
+function uhc_randomtp(p: player, arena: text):
+	set {_w} to {_arena} parsed as world
+	while {_p}'s gamemode is spectator:
+		set {_x} to a random number between 0 and {uhc::arena::%{_arena}%::cache::border::current-size}/2
+		set {_z} to a random number between 0 and {uhc::arena::%{_arena}%::cache::border::current-size}/2
+		set {_loc} to location({_x}, 0, {_z}, {_w})
+		{_loc}.getChunk().load()
+		set {_loc} to location of highest solid block at {_loc}
+		loop blocks in radius 2 of {_loc}:
+			if loop-block = water or lava:
+				set {_searching} to true
+			wait a tick
+		if {_searching} is not set:	
+			teleport {_p} to highest solid block at {_loc}
+			set {_p}'s gamemode to survival
+			apply blindness to {_p} for 2 seconds					
+			apply speed 1 to {_p} for 5 seconds		
+		delete {_searching}	
+		wait a tick
+
+function uhc_start(arena: text):
+	set {uhc::arena::%{_arena}%::cache::status} to "IN-GAME"
+	set {uhc::arena::%{_arena}%::cache::pvp} to false
+	set {_w} to {_arena} parsed as world
+	set {uhc::arena::%{_arena}%::cache::border::current-size} to yaml value "Arenas.%{_arena}%.border" from "leaf.uhc.arenas"
+	{_w}.getWorldBorder().setSize({uhc::arena::%{_arena}%::cache::border::current-size})	
+	{_w}.getWorldBorder().setCenter(yaml value "Arenas.%{_arena}%.center" from "leaf.uhc.arenas")
+	set {uhc::arena::%{_arena}%::cache::event} to "PvP In"
+	uhc_start_border({_arena})	
+	loop {uhc::arena::%{_arena}%::cache::ninjas::*}:
+		uhc_clear_player(loop-value)
+		uhc_createBoard(loop-value, "UHC-GAME", 15)
+		teleport loop-value-1 to yaml value "Arenas.%{_arena}%.center" from "leaf.uhc.arenas"
+		set gamemode of loop-value-1 to spectator
+		uhc_randomtp(loop-value-1, {_arena})
+		wait a tick	
+
+on right click:
+	if {uhc::player::%player%::state} is set:
+		event-item != air
+		if event-item is {uhc::cache::items::Leave} or {uhc::cache::items::Stats}:
+			cancel event
+			if event-item is {uhc::cache::items::Leave}:
+				uhc_leave(player)
+			if event-item is {uhc::cache::items::Stats}:
+				uhc_stats_menu(player)		
+	if {uhc::player::%player%::state} is "IN-GAME":
+		if event-item is player head:
+			apply regeneration 2 to the player for 5 seconds
+			apply absorption 1 to the player for 120 seconds
+			remove event-item from player	
+			
+on quit:
+	if {uhc::player::%player%::state} is set:
+		uhc_leave(player)
+	delete scoreboard of player
+
+
+function uhc_start_border_shrink(arena: text):
+	set {_int} to {uhc::arena::%{_arena}%::cache::border::current-size}
+	set {_w} to {_arena} parsed as world
+	{_w}.getWorldBorder().setSize(40 and {uhc::arena::%{_arena}%::cache::border::current-size})
+	while {uhc::arena::%{_arena}%::cache::status} = "IN-GAME":
+		remove 1 from {uhc::arena::%{_arena}%::cache::border::current-size}
+		if {uhc::arena::%{_arena}%::cache::border::current-size} = 40:
+			stop
+		wait a second
+
+function uhc_start_border(arena: text, time: number = 10, event: text = "pvp"):
+	set {_time_machine} to yaml value "settings.timers.pvp" from "leaf.uhc.config"
+	set {_time_machine2} to 60
+	while {uhc::arena::%{_arena}%::cache::status} is "IN-GAME":
+		remove 1 from {_time_machine2}
+		if {_time_machine2} = 0:
+			if {_time_machine} = 0:
+				if {_event} is "pvp":
+					set {uhc::arena::%{_arena}%::cache::pvp} to true
+					uhc_start_border({_arena}, yaml value "settings.timers.deathmatch" from "leaf.uhc.config", "border")
+					uhc_start_border_shrink({_arena})
+					set {uhc::arena::%{_arena}%::cache::event} to "Deathmatch In"
+					send yaml value "messages.pvp" from "leaf.uhc.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}
+					stop
+				if {_event} is "border":
+					{_arena} parsed as world.getWorldBorder().reset()
+					set {_id} to 1
+					set {_spawnpoints} to size of yaml nodes with keys "Arenas.%{_arena}%.deathmatch-spawnpoints" from "leaf.uhc.arenas"
+					send yaml value "messages.deathmatch" from "leaf.uhc.config" to {uhc::arena::%{_arena}%::cache::ninjas::*}
+					set {uhc::arena::%{_arena}%::cache::status} to "DEATHMATCH"
+					loop {uhc::arena::%{_arena}%::cache::ninjas::*}:
+						set {_loc} to yaml value "Arenas.%{_arena}%.deathmatch-spawnpoints.%{_id}%" from "leaf.uhc.arenas"
+						teleport loop-value-1 to {_loc}
+						apply blindness to the loop-value-1 for 3 seconds					
+						apply regeneration 2 to the loop-value-1 for 3 seconds
+						apply slowness 999 to the loop-value-1 for 3 seconds
+						add 1 to {_id}
+						if {_id} = {_spawnpoints}:
+							set {_id} to 1
+					stop			
+			set {_time_machine2} to 60
+			remove 1 from {_time_machine}
+		if {_time_machine2} < 10:
+			set {_mark2} to 0
+		else:
+			set {_mark2} to ""					
+		if {_time_machine} < 10:
+			set {_mark1} to 0
+		else:
+			set {_mark1} to ""			
+		set {uhc::arena::%{_arena}%::cache::time} to "%{_mark1}%%{_time_machine}%:%{_mark2}%%{_time_machine2}%"
+		wait a second
+
+on break:
+	if {uhc::player::%player%::state} is "IN-GAME":
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} != "IN-GAME" or "DEATHMATCH":
+			cancel event		
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} = "DEATHMATCH":			
+			if {uhc::arena::%{uhc::player::%player%::arena}%::PLACED-BLOCKS::%location of event-block%} is set:
+				delete {uhc::arena::%{uhc::player::%player%::arena}%::PLACED-BLOCKS::%location of event-block%}		
+			else:
+				cancel event									
+on place:
+	if {uhc::player::%player%::state} is "IN-GAME":
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} != "IN-GAME" or "DEATHMATCH":
+			cancel event	
+		if {uhc::arena::%{uhc::player::%player%::arena}%::cache::status} = "DEATHMATCH":			
+			if {uhc::arena::%{uhc::player::%player%::arena}%::PLACED-BLOCKS::%location of event-block%} is not set:
+				set {uhc::arena::%{uhc::player::%player%::arena}%::PLACED-BLOCKS::%location of event-block%} to location of event-block
+		
+function uhc_resetarena(arena: text):
+	loop {uhc::arena::%{_arena}%::cache::ninjas::*} and {uhc::arena::%{_arena}%::cache::bad-ninjas::*}:
+		loop "arena" and "state":
+			delete {uhc::player::%loop-value-1%::%loop-value-2%}		
+		uhc_clear_player(loop-value-1)
+		delete scoreboard of loop-value-1
+		yaml value "settings.mode" from "leaf.uhc.config" is "MultiArena":
+			teleport loop-value-1 to yaml value "Locations.Lobby" from "leaf.uhc.config"
+			set velocity of loop-value-1 to new vector 0, 0, 0
+		yaml value "settings.mode" from "leaf.uhc.config" is "Bungeecord":		
+			kick loop-value-1 due to "&e&nRestarting Server..."
+	if {_arena} parsed as world is set:
+		loop all players in world {_arena} parsed as world:
+			teleport loop-value-1 to yaml value "Locations.Lobby" from "leaf.uhc.config"
+		wait a second
+		loop all players in world {_arena} parsed as world:
+			kick loop-player due to "&eYou shouldn't be here so i just kicked you, Restarting Arena..."
+		wait a second				
+		Bukkit.getServer().unloadWorld(({_arena} parsed as world), false)
+		wait a second
+	FileUtils.forceDelete(new File({_arena}))	
+	create the async world called {_arena}
+	set {_w} to {_arena} parsed as world
+	{_w}.setKeepSpawnInMemory(false)
+	{_w}.setAutoSave(false)
+	{_w}.getWorldBorder().reset()
+	loop {uhc::arena::%{_arena}%::PLACED-BLOCKS::*}:
+		set block at location of {uhc::arena::%{_arena}%::PLACED-BLOCKS::%loop-index%} to air
+		wait a tick	
+	delete {uhc::arena::%{_arena}%::cache::*}	
+	set yaml value "Arenas.%{_arena}%.center" from "leaf.uhc.arenas" to location(0, 0, 0, {_arena} parsed as world)
+	set {uhc::arena::%{_arena}%::cache::seconds} to yaml value "settings.timers.in-lobby" from "leaf.uhc.config"
+	set {uhc::arena::%{_arena}%::cache::status} to "WAITING"
+						
+function uhc_clear_player(p: player):						
+	heal {_p}
+	extinguish {_p}
+	set {_p}'s food to 20	
+	clear {_p}'s level
+	clear {_p}'s inventory
+	{_p}.setFlying(false)
+	{_p}.setAllowFlight(false)	
+	set {_p}'s gamemode to survival
+	loop ...{_p}.getActivePotionEffects():
+		{_p}.removePotionEffect(loop-value.getType())	
+	
+
+function uhc_setSlot(p: player, board: text, slot: integer, t: text):
+	add "&a", "&b", "&c", "&d", "&e", "&1", "&2", "&3", "&4", "&5", "&6", "&7", "&8", "&9" and "&f" to {_d::*}
+	if {_slot} is between 1 and 15: 
+		set scoreboard line {_slot} of {_p} to "%{_d::%{_slot}%}%%{_t}%"
+
+function uhc_get_direction(p: player, target: location) :: text:
+	set {_vector} to {_target}.toVector().subtract({_p}.getLocation().toVector())
+	set {_direction} to {_p}.getEyeLocation().getDirection()
+	set {_angle} to {_vector}.angle({_direction})
+	set {_r} to {_angle} * 180 / 3.14159265359
+	set {_directions::*} to "⬆", "⬅", "⬇" and "➡"
+	set {_values::*} to 45, 135, 225 and 315	
+	loop {_values::*}:
+		{_r} < loop-value
+		if {_r} > 45:
+			if {_r} <= 135:
+				if {_vector}.crossProduct({_direction}).getY() > 0.0:
+					return "➡"
+				else:
+					return "⬅"
+		return {_directions::%loop-index%}	
+	
+function uhc_createBoard(p: player, t: text, size: integer = 15):
+	set {_arena} to {uhc::player::%{_p}%::arena}
+	create scoreboard for {_p}
+	set scoreboard title of {_p} to yaml value "settings.scoreboard.name" from "leaf.uhc.config"
+	if {_t} is "UHC-GAME":
+		while {uhc::arena::%{uhc::player::%{_p}%::arena}%::cache::status} is "IN-GAME":	
+			if {uhc::arena::%{_arena}%::cache::time} is "&cBORDER CLOSING":
+				set {_distance-check} to {uhc::arena::%{_arena}%::cache::border::current-size}/2
+			else:
+				set {_distance-check} to {uhc::arena::%{_arena}%::cache::border::current-size}
+			if distance between {_p} and yaml value "Arenas.%{_arena}%.center" from "leaf.uhc.arenas" < {_distance-check}:
+				set {_status} to "&aSAFE"
+				set {_color} to "&a"
+			else:
+				set {_status} to "&cNOT STAFE"
+				set {_color} to "&7"
+			set {_dir} to uhc_get_direction({_p}, yaml value "Arenas.%{_arena}%.center" from "leaf.uhc.arenas")
+			loop "⬆", "⬅", "⬇" and "➡":
+				if loop-value-1 is {_dir}:
+					set {_pointer::%loop-value-1%} to "&a%loop-value-1%&7"
+				else:
+					set {_pointer::%loop-value-1%} to "%{_color}%%loop-value-1%"
+			uhc_setSlot({_p}, "UHC-GAME", 1, "&7%now%")
+			uhc_setSlot({_p}, "UHC-GAME", 2, "")									
+			uhc_setSlot({_p}, "UHC-GAME", 3, "&8▪ &f%{uhc::arena::%{_arena}%::cache::event}%: &a%{uhc::arena::%{_arena}%::cache::time}%")					
+			uhc_setSlot({_p}, "UHC-GAME", 4, "&8▪ &fPlayers left: &a%size of {uhc::arena::%{_arena}%::cache::ninjas::*}%/100")		
+			uhc_setSlot({_p}, "UHC-GAME", 5, "&8▪ &fKills: &a%{uhc::player::%{_p}%::kills}%")
+			uhc_setSlot({_p}, "UHC-GAME", 6, "")										
+			uhc_setSlot({_p}, "UHC-GAME", 7, "   %{_pointer::⬆}%")						
+			uhc_setSlot({_p}, "UHC-GAME", 8, "%{_pointer::⬅}%   %{_pointer::➡}% &fPlay zone")					
+			uhc_setSlot({_p}, "UHC-GAME", 9, "   %{_pointer::⬇}%    %{_status}%")
+			uhc_setSlot({_p}, "UHC-GAME", 10, "")					
+			uhc_setSlot({_p}, "UHC-GAME", 11, "&c❤ &e%{_p}'s health% &f%{_p}'s display name% &7(You)")				
+			uhc_setSlot({_p}, "UHC-GAME", 12, "")											
+			uhc_setSlot({_p}, "UHC-GAME", 13, "&8▪ &fBorder: &a%{uhc::arena::%{_arena}%::cache::border::current-size}%x%{uhc::arena::%{_arena}%::cache::border::current-size}%m")					
+			uhc_setSlot({_p}, "UHC-GAME", 14, "")	
+			uhc_setSlot({_p}, "UHC-GAME", 15, yaml value "settings.scoreboard.website" from "leaf.uhc.config")							
+			wait a second
+	if {_t} is "UHC-WAITING":
+		while {uhc::arena::%{uhc::player::%{_p}%::arena}%::cache::status} is "WAITING" or "STARTING":	
+			uhc_setSlot({_p}, "UHC-WAITING", 1, "&7%now%")
+			uhc_setSlot({_p}, "UHC-WAITING", 2, "")					
+			uhc_setSlot({_p}, "UHC-WAITING", 3, "&8▪ &fStarting in &a%{uhc::arena::%{_arena}%::cache::seconds}%")				
+			uhc_setSlot({_p}, "UHC-WAITING", 4, "")						
+			uhc_setSlot({_p}, "UHC-WAITING", 5, "&8▪ &fPlayers &a%size of {uhc::arena::%{_arena}%::cache::ninjas::*}%/100")					
+			uhc_setSlot({_p}, "UHC-WAITING", 6, "")	
+			uhc_setSlot({_p}, "UHC-WAITING", 7, "&8▪ &fArena &a%{uhc::player::%{_p}%::arena}%")	
+			uhc_setSlot({_p}, "UHC-WAITING", 8, "")									
+			uhc_setSlot({_p}, "UHC-WAITING", 9, yaml value "settings.scoreboard.website" from "leaf.uhc.config")			
+			wait a second		
+				
+
+#El Psy Kongroo
